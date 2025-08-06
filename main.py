@@ -143,7 +143,7 @@ def calc_excel(data_file):
     l_variance = sum((x - l_mean) ** 2 for x in l_daily_counts) / len(l_daily_counts) if l_daily_counts else 0
 
     # 打印结果
-    print("计算结果:")
+    print(f"{data_file }计算结果:")
     print(f"1. 过修程度指标:")
     print(f"   Z检修过修指标: {z_over_repair_indicator:.4f}")
     print(f"   L检修过修指标: {l_over_repair_indicator:.4f}")
@@ -161,7 +161,7 @@ def calc_excel(data_file):
     }
 
 
-def export_to_excel(solver, x, z, l, vehicles, routes, days, filename="排班结果.xlsx"):
+def export_to_excel(solver, x, z, l, vehicles, routes, days, filename):
     """
     将排班结果导出到Excel文件
 
@@ -482,7 +482,7 @@ def main():
         # print(f"总检修次数: {solver.Value(total_z)} + {solver.Value(total_l)}")
         # print(f"Z检修不均衡: {solver.Value(z_variance)}")
         # print(f"L检修不均衡: {solver.Value(l_variance)}")
-        print(f"换车次数: {sum(solver.Value(v) for v in change_count)}")
+        # print(f"换车次数: {sum(solver.Value(v) for v in change_count)}")
 
         export_to_excel(
             solver=solver,
@@ -510,9 +510,8 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    data_file = "railway_schedule_result.xlsx"
-    calc_excel(data_file )
-    calc_excel("Result.xlsx")
+    main()
+    calc_excel(r"railway_schedule_result.xlsx")
+    calc_excel(r"Result.xlsx")
 
 
