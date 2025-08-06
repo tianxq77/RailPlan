@@ -6,6 +6,161 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 
+def calc_excel(data_file):
+    """
+    读取Excel文件并计算三个指标：
+    1. 过修程度指标（Z检修和L检修）
+    2. 换车次数指标
+    3. 检修均衡指标（Z检修和L检修）
+    """
+    # 读取数据文件
+    df_schedule = pd.read_excel(data_file, sheet_name="甘特图")
+
+    # 读取车组初始信息
+    df_mileage = pd.read_excel("Data.xlsx", sheet_name="车组里程修时信息")
+    df_recover = pd.read_excel("Data.xlsx", sheet_name="车组修后恢复信息")
+
+    # 获取恢复值
+    recover_Z_day = int(df_recover[df_recover['检修类型'] == 'Z']['修后恢复天数'].iloc[0])
+    recover_Z_km = int(df_recover[df_recover['检修类型'] == 'Z']['修后恢复公里数'].iloc[0])
+    recover_L_km = int(df_recover[df_recover['检修类型'] == 'L']['修后恢复公里数'].iloc[0])
+
+    # 获取车组初始剩余数据
+    initial_Z_day = dict(zip(df_mileage['车组号'], df_mileage['Z剩余天数']))
+    initial_Z_km = dict(zip(df_mileage['车组号'], df_mileage['Z剩余里程']))
+    initial_L_km = dict(zip(df_mileage['车组号'], df_mileage['L剩余里程']))
+
+    # 1. 计算过修程度指标
+    z_over_repair_day = 0
+    z_over_repair_km = 0
+    l_over_repair_km = 0
+
+    # 获取所有执行Z检修的车组
+    z_maint_days = [col for col in df_schedule.columns if col.lower().startswith('day')]
+    z_maint_vehicles = []
+
+    for day in z_maint_days:
+        z_cells = df_schedule[df_schedule['任务'] == 'Z'][day].values[0]
+        if pd.notna(z_cells) and z_cells != '':
+            for v in z_cells.split(','):
+                z_maint_vehicles.append((v, day))
+
+    # 计算Z检修过修指标
+    for v, day in z_maint_vehicles:
+        # 获取修前剩余天数
+        z_over_repair_day += initial_Z_day[v]
+        # 获取修前剩余里程
+        z_over_repair_km += initial_Z_km[v]
+
+    z_over_repair_indicator = (
+                (z_over_repair_day / recover_Z_day + z_over_repair_km / recover_Z_km) / 2) if z_maint_vehicles else 0
+
+    # 获取所有执行L检修的车组
+    l_maint_vehicles = []
+    for day in z_maint_days:
+        l_cells = df_schedule[df_schedule['任务'] == 'L'][day].values[0]
+        if pd.notna(l_cells) and l_cells != '':
+            for v in l_cells.split(','):
+                l_maint_vehicles.append((v, day))
+
+    # 计算L检修过修指标
+    for v, day in l_maint_vehicles:
+        l_over_repair_km += initial_L_km[v]
+
+    l_over_repair_indicator = l_over_repair_km / recover_L_km if l_maint_vehicles else 0
+
+
+
+    # 2. 计算换车次数指标
+    # 读取交路信息
+    df_route = pd.read_excel("Data.xlsx", sheet_name="待排交路信息")
+    route_rid = dict(zip(df_route['交路'], df_route['R_ID']))
+
+    # 获取R_ID对应的交路列表
+    from collections import defaultdict
+    r_id_routes = defaultdict(list)
+    for r, rid in route_rid.items():
+        r_id_routes[rid].append(r)
+
+    total_change = 0
+    max_possible_change = len(z_maint_days) - 1  # day-1
+
+    for rid, r_list in r_id_routes.items():
+        # if len(r_list) < 2:  # 单交路不需要连续执行
+        #     continue
+
+        last_route = r_list[-1]  # 当前交路组的最后一个交路
+        first_route = r_list[0]  # 当前交路组的第一个交路
+
+        change_count = 0
+        for t in range(1, len(z_maint_days)):
+            prev_day = z_maint_days[t - 1]
+            curr_day = z_maint_days[t]
+
+            # 获取前一天执行最后交路的车组
+            prev_vehicle = None
+            for v in df_mileage['车组号']:
+                if df_schedule.loc[df_schedule['任务'] == last_route, prev_day].values[0] == v:
+                    prev_vehicle = v
+                    break
+
+            # 获取当天执行首交路的车组
+            curr_vehicle = None
+            for v in df_mileage['车组号']:
+                if df_schedule.loc[df_schedule['任务'] == first_route, curr_day].values[0] == v:
+                    curr_vehicle = v
+                    break
+
+            if prev_vehicle and curr_vehicle and prev_vehicle != curr_vehicle:
+                change_count += 1
+
+        if max_possible_change > 0:
+            total_change += change_count / max_possible_change
+
+    change_indicator = total_change
+
+    # 3. 计算检修均衡指标
+    # 计算每日Z检修量
+    z_daily_counts = []
+    for day in z_maint_days:
+        z_cells = df_schedule[df_schedule['任务'] == 'Z'][day].values[0]
+        count = 0 if pd.isna(z_cells) or z_cells == '' else len(z_cells.split(','))
+        z_daily_counts.append(count)
+
+    # 计算Z检修方差
+    z_mean = sum(z_daily_counts) / len(z_daily_counts) if z_daily_counts else 0
+    z_variance = sum((x - z_mean) ** 2 for x in z_daily_counts) / len(z_daily_counts) if z_daily_counts else 0
+
+    # 计算每日L检修量
+    l_daily_counts = []
+    for day in z_maint_days:
+        l_cells = df_schedule[df_schedule['任务'] == 'L'][day].values[0]
+        count = 0 if pd.isna(l_cells) or l_cells == '' else len(l_cells.split(','))
+        l_daily_counts.append(count)
+
+    # 计算L检修方差
+    l_mean = sum(l_daily_counts) / len(l_daily_counts) if l_daily_counts else 0
+    l_variance = sum((x - l_mean) ** 2 for x in l_daily_counts) / len(l_daily_counts) if l_daily_counts else 0
+
+    # 打印结果
+    print("计算结果:")
+    print(f"1. 过修程度指标:")
+    print(f"   Z检修过修指标: {z_over_repair_indicator:.4f}")
+    print(f"   L检修过修指标: {l_over_repair_indicator:.4f}")
+    print(f"2. 换车次数指标: {change_indicator:.4f}")
+    print(f"3. 检修均衡指标:")
+    print(f"   Z检修均衡指标: {z_variance:.4f}")
+    print(f"   L检修均衡指标: {l_variance:.4f}")
+
+    return {
+        "z_over_repair": z_over_repair_indicator,
+        "l_over_repair": l_over_repair_indicator,
+        "change_indicator": change_indicator,
+        "z_variance": z_variance,
+        "l_variance": l_variance
+    }
+
+
 def export_to_excel(solver, x, z, l, vehicles, routes, days, filename="排班结果.xlsx"):
     """
     将排班结果导出到Excel文件
@@ -22,7 +177,7 @@ def export_to_excel(solver, x, z, l, vehicles, routes, days, filename="排班结
     """
     wb = Workbook()
     ws = wb.active
-    ws.title = "排班结果"
+    ws.title = "甘特图"
 
     # 写入表头
     headers = ["任务"] + days
@@ -46,14 +201,14 @@ def export_to_excel(solver, x, z, l, vehicles, routes, days, filename="排班结
         ws.append(row_data)
 
     # 2. 写入Z检修
-    z_row = ["Z检修"]
+    z_row = ["Z"]
     for d in days:
         z_list = [v for v in vehicles if solver.Value(z[v, d])]
         z_row.append(",".join(z_list))
     ws.append(z_row)
 
     # 3. 写入L检修
-    l_row = ["L检修"]
+    l_row = ["L"]
     for d in days:
         l_list = [v for v in vehicles if solver.Value(l[v, d])]
         l_row.append(",".join(l_list))
@@ -355,4 +510,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    data_file = "railway_schedule_result.xlsx"
+    calc_excel(data_file )
+    calc_excel("Result.xlsx")
+
+
